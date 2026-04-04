@@ -9,33 +9,23 @@ from utils import load_pdf, split_text, create_vector_store, load_qa_chain
 
 st.set_page_config(page_title="ChatPDF AI", layout="wide")
 
-# ---------------- CUSTOM CSS ----------------
+# ---------------- CSS ----------------
 st.markdown("""
 <style>
-.stApp {
-    background-color: #0e1117;
-    color: white;
-}
-.title {
-    font-size: 36px;
-    font-weight: 700;
-}
-.subtitle {
-    font-size: 16px;
-    color: #9aa0a6;
-}
-.stButton>button {
-    border-radius: 10px;
-}
-section[data-testid="stSidebar"] {
-    background-color: #111827;
-}
+.stApp { background-color: #0e1117; color: white; }
+.title { font-size: 36px; font-weight: 700; }
+.subtitle { color: #9aa0a6; }
+.stButton>button { border-radius: 10px; }
+section[data-testid="stSidebar"] { background-color: #111827; }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- PAGE STATE ----------------
+# ---------------- STATE ----------------
 if "page" not in st.session_state:
     st.session_state.page = "chat"
+
+if "processed" not in st.session_state:
+    st.session_state.processed = False
 
 # ---------------- CACHE ----------------
 @st.cache_resource
@@ -50,25 +40,32 @@ with st.sidebar:
 
     if uploaded_file:
 
-        # ✅ Read file safely
         file_bytes = uploaded_file.getvalue()
-
-        # ✅ Create unique hash (for caching)
         file_hash = hashlib.md5(file_bytes).hexdigest()
 
-        st.session_state.pdf_bytes = file_bytes
-        st.session_state.file_hash = file_hash
+        # 🔥 PROCESS ONLY IF NEW FILE
+        if st.session_state.get("file_hash") != file_hash:
 
-        with st.spinner("⚙️ Processing document..."):
-            docs = load_pdf(file_bytes)
-            chunks = split_text(docs)
+            st.session_state.file_hash = file_hash
+            st.session_state.pdf_bytes = file_bytes
+            st.session_state.processed = False
 
-            if len(chunks) == 0:
-                st.error("⚠️ This PDF has no readable text (maybe scanned). Try another file.")
-            else:
-                db = get_vector_db(file_hash, chunks)
-                st.session_state.qa = load_qa_chain(db)
-                st.success("✅ Ready to chat!")
+        # 🔥 PROCESS ONLY ONCE
+        if not st.session_state.processed:
+
+            with st.spinner("⚙️ Processing document..."):
+
+                docs = load_pdf(file_bytes)
+                chunks = split_text(docs)
+
+                if len(chunks) == 0:
+                    st.error("⚠️ No readable text found")
+                else:
+                    db = get_vector_db(file_hash, chunks)
+                    st.session_state.qa = load_qa_chain(db)
+                    st.session_state.processed = True
+
+            st.success("✅ Ready to chat!")
 
     st.markdown("---")
 
@@ -78,15 +75,15 @@ with st.sidebar:
     if st.button("📄 Preview"):
         st.session_state.page = "pdf"
 
-# ---------------- CHAT PAGE ----------------
+# ---------------- CHAT ----------------
 if st.session_state.page == "chat":
 
-    st.markdown('<div class="title">🤖 ChatPDF AI Assistant</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Ask questions from your PDF instantly</div>', unsafe_allow_html=True)
+    st.markdown('<div class="title">🤖 ChatPDF AI</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Chat with your PDF instantly</div>', unsafe_allow_html=True)
 
     col1, col2 = st.columns([8, 1])
     with col2:
-        if st.button("🧹 Clear"):
+        if st.button("🧹"):
             st.session_state.messages = []
             st.rerun()
 
@@ -97,7 +94,7 @@ if st.session_state.page == "chat":
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    user_input = st.chat_input("💬 Ask something about your document...")
+    user_input = st.chat_input("💬 Ask something...")
 
     if user_input:
         st.session_state.messages.append({"role": "user", "content": user_input})
@@ -106,31 +103,27 @@ if st.session_state.page == "chat":
             st.markdown(user_input)
 
         if "qa" not in st.session_state:
-            response = "⚠️ Please upload a PDF first"
+            response = "⚠️ Upload a PDF first"
         else:
             try:
                 with st.spinner("🤔 Thinking..."):
                     result = st.session_state.qa.invoke({"query": user_input})
                     response = result["result"]
-            except Exception as e:
-                if "429" in str(e):
-                    response = "⚠️ API quota exceeded"
-                elif "403" in str(e):
-                    response = "⚠️ API blocked"
-                else:
-                    response = "⚠️ Something went wrong"
+            except Exception:
+                response = "⚠️ Error occurred"
 
         st.session_state.messages.append({"role": "assistant", "content": response})
 
         with st.chat_message("assistant"):
             st.markdown(response)
 
-# ---------------- PDF PAGE ----------------
+# ---------------- PREVIEW ----------------
 elif st.session_state.page == "pdf":
 
     st.markdown('<div class="title">📄 Document Preview</div>', unsafe_allow_html=True)
 
     if "pdf_bytes" in st.session_state:
+
         base64_pdf = base64.b64encode(st.session_state.pdf_bytes).decode("utf-8")
 
         st.markdown(
