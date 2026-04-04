@@ -1,35 +1,38 @@
 import streamlit as st
 from dotenv import load_dotenv
-import base64
-import hashlib
+from streamlit_pdf_viewer import pdf_viewer
 
 load_dotenv()
 
 from utils import load_pdf, split_text, create_vector_store, load_qa_chain
 
-st.set_page_config(page_title="ChatPDF AI", layout="wide")
+st.set_page_config(page_title="AI PDF Chat", layout="wide")
 
-# ---------------- CSS ----------------
+# ---------------- CUSTOM CSS ----------------
 st.markdown("""
 <style>
 .stApp { background-color: #0e1117; color: white; }
 .title { font-size: 36px; font-weight: 700; }
-.subtitle { color: #9aa0a6; }
-.stButton>button { border-radius: 10px; }
+.subtitle { font-size: 16px; color: #9aa0a6; }
+.stButton>button { border-radius: 10px; padding: 8px 16px; }
+[data-testid="stChatMessage"] { border-radius: 12px; padding: 10px; }
 section[data-testid="stSidebar"] { background-color: #111827; }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- STATE ----------------
+# ---------------- PAGE STATE ----------------
 if "page" not in st.session_state:
     st.session_state.page = "chat"
 
 if "processed" not in st.session_state:
     st.session_state.processed = False
 
+if "file_name" not in st.session_state:
+    st.session_state.file_name = None
+
 # ---------------- CACHE ----------------
 @st.cache_resource
-def get_vector_db(file_hash, docs):
+def get_vector_db(docs):
     return create_vector_store(docs)
 
 # ---------------- SIDEBAR ----------------
@@ -40,28 +43,26 @@ with st.sidebar:
 
     if uploaded_file:
 
-        file_bytes = uploaded_file.getvalue()
-        file_hash = hashlib.md5(file_bytes).hexdigest()
-
-        # 🔥 PROCESS ONLY IF NEW FILE
-        if st.session_state.get("file_hash") != file_hash:
-
-            st.session_state.file_hash = file_hash
-            st.session_state.pdf_bytes = file_bytes
+        # ✅ Detect new file
+        if st.session_state.file_name != uploaded_file.name:
+            st.session_state.file_name = uploaded_file.name
             st.session_state.processed = False
 
-        # 🔥 PROCESS ONLY ONCE
+        # ✅ Read bytes (IMPORTANT FIX)
+        file_bytes = uploaded_file.getvalue()
+        st.session_state.pdf_bytes = file_bytes
+
+        # ✅ Process only once
         if not st.session_state.processed:
 
             with st.spinner("⚙️ Processing document..."):
-
                 docs = load_pdf(file_bytes)
                 chunks = split_text(docs)
 
                 if len(chunks) == 0:
-                    st.error("⚠️ No readable text found")
+                    st.error("⚠️ This PDF has no readable text (maybe scanned). Try another file.")
                 else:
-                    db = get_vector_db(file_hash, chunks)
+                    db = get_vector_db(chunks)
                     st.session_state.qa = load_qa_chain(db)
                     st.session_state.processed = True
 
@@ -75,15 +76,15 @@ with st.sidebar:
     if st.button("📄 Preview"):
         st.session_state.page = "pdf"
 
-# ---------------- CHAT ----------------
+# ---------------- CHAT PAGE ----------------
 if st.session_state.page == "chat":
 
-    st.markdown('<div class="title">🤖 ChatPDF AI</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Chat with your PDF instantly</div>', unsafe_allow_html=True)
+    st.markdown('<div class="title">🤖 AI PDF Chat Assistant</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Ask questions from your PDF instantly</div>', unsafe_allow_html=True)
 
     col1, col2 = st.columns([8, 1])
     with col2:
-        if st.button("🧹"):
+        if st.button("🧹 Clear"):
             st.session_state.messages = []
             st.rerun()
 
@@ -94,7 +95,7 @@ if st.session_state.page == "chat":
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    user_input = st.chat_input("💬 Ask something...")
+    user_input = st.chat_input("💬 Ask something about your document...")
 
     if user_input:
         st.session_state.messages.append({"role": "user", "content": user_input})
@@ -103,38 +104,30 @@ if st.session_state.page == "chat":
             st.markdown(user_input)
 
         if "qa" not in st.session_state:
-            response = "⚠️ Upload a PDF first"
+            response = "⚠️ Please upload a PDF first"
         else:
-            try:
-                with st.spinner("🤔 Thinking..."):
+            with st.spinner("🤔 Thinking..."):
+                try:
                     result = st.session_state.qa.invoke({"query": user_input})
                     response = result["result"]
-            except Exception:
-                response = "⚠️ Error occurred"
+                except Exception as e:
+                    if "quota" in str(e).lower() or "429" in str(e):
+                        response = "⚠️ API quota exceeded. Please wait or try later."
+                    else:
+                        response = "⚠️ Something went wrong. Try again."
 
         st.session_state.messages.append({"role": "assistant", "content": response})
 
         with st.chat_message("assistant"):
             st.markdown(response)
 
-# ---------------- PREVIEW ----------------
+# ---------------- PDF PAGE ----------------
 elif st.session_state.page == "pdf":
 
     st.markdown('<div class="title">📄 Document Preview</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">View your uploaded PDF</div>', unsafe_allow_html=True)
 
     if "pdf_bytes" in st.session_state:
-
-        base64_pdf = base64.b64encode(st.session_state.pdf_bytes).decode("utf-8")
-
-        st.markdown(
-            f"""
-            <iframe 
-                src="data:application/pdf;base64,{base64_pdf}" 
-                width="100%" 
-                height="600px">
-            </iframe>
-            """,
-            unsafe_allow_html=True
-        )
+        pdf_viewer(st.session_state.pdf_bytes)
     else:
-        st.warning("⚠️ Upload a PDF first")
+        st.warning("⚠️ Upload a PDF to preview")

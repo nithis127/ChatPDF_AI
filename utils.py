@@ -5,9 +5,9 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains import RetrievalQA
 from langchain_community.embeddings import HuggingFaceEmbeddings
 import tempfile
+import os
 
 
-# Load PDF from memory
 def load_pdf(file_bytes):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(file_bytes)
@@ -15,10 +15,11 @@ def load_pdf(file_bytes):
 
     loader = PyPDFLoader(tmp_path)
     docs = loader.load()
+
+    os.remove(tmp_path)  # cleanup
     return docs
 
 
-# Split text
 def split_text(docs):
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=300,
@@ -27,7 +28,6 @@ def split_text(docs):
     return splitter.split_documents(docs)
 
 
-# Create vector DB
 def create_vector_store(docs):
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
@@ -35,7 +35,6 @@ def create_vector_store(docs):
     return FAISS.from_documents(docs, embeddings)
 
 
-# Load QA chain
 def load_qa_chain(db):
     llm = ChatGoogleGenerativeAI(
         model="models/gemini-2.0-flash",
