@@ -58,7 +58,7 @@ def load_qa_chain(db):
     )
 
     llm = ChatGoogleGenerativeAI(
-        model="models/gemini-2.0-flash",
+        model="gemini-pro",
         temperature=0.2
     )
 
