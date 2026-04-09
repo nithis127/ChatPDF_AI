@@ -1,6 +1,6 @@
 import streamlit as st
 from dotenv import load_dotenv
-from streamlit_pdf_viewer import pdf_viewer
+import hashlib
 
 load_dotenv()
 
@@ -20,47 +20,43 @@ section[data-testid="stSidebar"] { background-color: #111827; }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- PAGE STATE ----------------
-if "page" not in st.session_state:
-    st.session_state.page = "chat"
-
+# ---------------- SESSION STATE ----------------
 if "processed" not in st.session_state:
     st.session_state.processed = False
 
-if "file_name" not in st.session_state:
-    st.session_state.file_name = None
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "file_hash" not in st.session_state:
+    st.session_state.file_hash = None
 
 # ---------------- CACHE ----------------
 @st.cache_resource
-def get_vector_db(docs):
-    return create_vector_store(docs)
+def get_vector_db(chunks):
+    return create_vector_store(chunks)
 
 # ---------------- SIDEBAR ----------------
 with st.sidebar:
-    st.markdown("## 📂 Navigation")
+    st.markdown("## 📂 Upload PDF")
 
-    uploaded_file = st.file_uploader("📄 Upload PDF", type="pdf")
+    uploaded_file = st.file_uploader("Upload your PDF", type="pdf")
 
     if uploaded_file:
 
-        # ✅ Detect new file
-        if st.session_state.file_name != uploaded_file.name:
-            st.session_state.file_name = uploaded_file.name
+        file_bytes = uploaded_file.getvalue()
+        current_hash = hashlib.md5(file_bytes).hexdigest()
+
+        if st.session_state.file_hash != current_hash:
+            st.session_state.file_hash = current_hash
             st.session_state.processed = False
 
-        # ✅ Read bytes (IMPORTANT FIX)
-        file_bytes = uploaded_file.getvalue()
-        st.session_state.pdf_bytes = file_bytes
-
-        # ✅ Process only once
         if not st.session_state.processed:
-
             with st.spinner("⚙️ Processing document..."):
                 docs = load_pdf(file_bytes)
                 chunks = split_text(docs)
 
                 if len(chunks) == 0:
-                    st.error("⚠️ This PDF has no readable text (maybe scanned). Try another file.")
+                    st.error("⚠️ No readable text found in PDF")
                 else:
                     db = get_vector_db(chunks)
                     st.session_state.qa = load_qa_chain(db)
@@ -70,64 +66,77 @@ with st.sidebar:
 
     st.markdown("---")
 
-    if st.button("💬 Chat"):
-        st.session_state.page = "chat"
-
-    if st.button("📄 Preview"):
-        st.session_state.page = "pdf"
-
-# ---------------- CHAT PAGE ----------------
-if st.session_state.page == "chat":
-
-    st.markdown('<div class="title">🤖 AI PDF Chat Assistant</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Ask questions from your PDF instantly</div>', unsafe_allow_html=True)
-
-    col1, col2 = st.columns([8, 1])
-    with col2:
-        if st.button("🧹 Clear"):
-            st.session_state.messages = []
-            st.rerun()
-
-    if "messages" not in st.session_state:
+    if st.button("🧹 Clear Chat"):
         st.session_state.messages = []
+        st.session_state.qa = None
+        st.session_state.processed = False
+        st.rerun()
 
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+# ---------------- MAIN ----------------
+st.markdown('<div class="title">🤖 AI PDF Chat Assistant</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">Ask questions from your PDF instantly</div>', unsafe_allow_html=True)
 
-    user_input = st.chat_input("💬 Ask something about your document...")
+# ---------------- CHAT HISTORY ----------------
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-    if user_input:
-        st.session_state.messages.append({"role": "user", "content": user_input})
+# ---------------- USER INPUT ----------------
+user_input = st.chat_input("💬 Ask something about your document...")
 
-        with st.chat_message("user"):
-            st.markdown(user_input)
+if user_input:
 
-        if "qa" not in st.session_state:
-            response = "⚠️ Please upload a PDF first"
-        else:
-            with st.spinner("🤔 Thinking..."):
-                try:
-                    result = st.session_state.qa.invoke({"query": user_input})
-                    response = result["result"]
-                except Exception as e:
-                    if "quota" in str(e).lower() or "429" in str(e):
-                        response = "⚠️ API quota exceeded. Please wait or try later."
-                    else:
-                        response = "⚠️ Something went wrong. Try again."
+    st.session_state.messages.append({"role": "user", "content": user_input})
 
-        st.session_state.messages.append({"role": "assistant", "content": response})
+    with st.chat_message("user"):
+        st.markdown(user_input)
 
-        with st.chat_message("assistant"):
-            st.markdown(response)
+    if "qa" not in st.session_state:
+        response = "⚠️ Please upload a PDF first"
 
-# ---------------- PDF PAGE ----------------
-elif st.session_state.page == "pdf":
-
-    st.markdown('<div class="title">📄 Document Preview</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">View your uploaded PDF</div>', unsafe_allow_html=True)
-
-    if "pdf_bytes" in st.session_state:
-        pdf_viewer(st.session_state.pdf_bytes)
     else:
-        st.warning("⚠️ Upload a PDF to preview")
+        with st.spinner("🤔 Thinking..."):
+            try:
+                # 🧠 Chat history context
+                history = "\n".join(
+                    [f"{m['role']}: {m['content']}" for m in st.session_state.messages]
+                )
+
+                query = f"""
+                Chat History:
+                {history}
+
+                Question:
+                {user_input}
+                """
+
+                result = st.session_state.qa.invoke({"query": query})
+
+                response = result["result"]
+
+                # 📄 Source display
+                sources = result.get("source_documents", [])
+                if sources:
+                    response += "\n\n📄 **Sources:**\n"
+                    for doc in sources:
+                        page = doc.metadata.get("page", "N/A")
+                        response += f"- Page {page + 1}\n"
+
+            except Exception as e:
+                if "quota" in str(e).lower() or "429" in str(e):
+                    response = "⚠️ API quota exceeded. Try later."
+                else:
+                    response = "⚠️ Something went wrong."
+
+    st.session_state.messages.append({"role": "assistant", "content": response})
+
+    # ---------------- STREAMING EFFECT ----------------
+    with st.chat_message("assistant"):
+        placeholder = st.empty()
+        full_response = ""
+
+        for word in response.split():
+            full_response += word + " "
+            placeholder.markdown(full_response + "▌")
+
+        placeholder.markdown(full_response)

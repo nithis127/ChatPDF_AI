@@ -1,6 +1,29 @@
+# Virtual Environment
 .venv/
+
+# Python cache
 __pycache__/
 *.pyc
+
+# Environment variables
 .env
+
+# Temp files
 temp.pdf
+*.log
+*.tmp
+
+# Vector DB
+faiss_index/
 vector_store/
+
+# Streamlit
+.streamlit/
+
+# VS Code / Devcontainer
+.devcontainer/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
