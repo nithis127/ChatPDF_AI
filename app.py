@@ -1,142 +1,141 @@
 import streamlit as st
 from dotenv import load_dotenv
+import os
 import hashlib
+import time
 
+from rag_pipeline import process_pdf, generate_answer
+
+# 🔷 Load env
 load_dotenv()
 
-from utils import load_pdf, split_text, create_vector_store, load_qa_chain
+# 🔷 Page config
+st.set_page_config(
+    page_title="ChatPDF AI",
+    page_icon="💬",
+    layout="wide"
+)
 
-st.set_page_config(page_title="AI PDF Chat", layout="wide")
+st.title("💬 ChatPDF AI")
+st.caption("Ask questions about your PDF instantly using AI 🚀")
 
-# ---------------- CUSTOM CSS ----------------
-st.markdown("""
-<style>
-.stApp { background-color: #0e1117; color: white; }
-.title { font-size: 36px; font-weight: 700; }
-.subtitle { font-size: 16px; color: #9aa0a6; }
-.stButton>button { border-radius: 10px; padding: 8px 16px; }
-[data-testid="stChatMessage"] { border-radius: 12px; padding: 10px; }
-section[data-testid="stSidebar"] { background-color: #111827; }
-</style>
-""", unsafe_allow_html=True)
+# 🔷 Session state init
+if "vector_db" not in st.session_state:
+    st.session_state.vector_db = None
 
-# ---------------- SESSION STATE ----------------
-if "processed" not in st.session_state:
-    st.session_state.processed = False
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
 if "file_hash" not in st.session_state:
     st.session_state.file_hash = None
 
-# ---------------- CACHE ----------------
-@st.cache_resource
-def get_vector_db(chunks):
-    return create_vector_store(chunks)
 
-# ---------------- SIDEBAR ----------------
+# 🔷 Sidebar
 with st.sidebar:
-    st.markdown("## 📂 Upload PDF")
+    st.header("⚙️ Settings")
 
-    uploaded_file = st.file_uploader("Upload your PDF", type="pdf")
+    uploaded_file = st.file_uploader("Upload PDF", type="pdf")
 
-    if uploaded_file:
-
-        file_bytes = uploaded_file.getvalue()
-        current_hash = hashlib.md5(file_bytes).hexdigest()
-
-        if st.session_state.file_hash != current_hash:
-            st.session_state.file_hash = current_hash
-            st.session_state.processed = False
-
-        if not st.session_state.processed:
-            with st.spinner("⚙️ Processing document..."):
-                docs = load_pdf(file_bytes)
-                chunks = split_text(docs)
-
-                if len(chunks) == 0:
-                    st.error("⚠️ No readable text found in PDF")
-                else:
-                    db = get_vector_db(chunks)
-                    st.session_state.qa = load_qa_chain(db)
-                    st.session_state.processed = True
-
-            st.success("✅ Ready to chat!")
-
-    st.markdown("---")
-
+    # 🔷 Clear chat
     if st.button("🧹 Clear Chat"):
-        st.session_state.messages = []
-        st.session_state.qa = None
-        st.session_state.processed = False
+        st.session_state.chat_history = []
         st.rerun()
 
-# ---------------- MAIN ----------------
-st.markdown('<div class="title">🤖 AI PDF Chat Assistant</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">Ask questions from your PDF instantly</div>', unsafe_allow_html=True)
+    # 🔷 Auto process PDF
+    if uploaded_file:
+        file_bytes = uploaded_file.getvalue()
 
-# ---------------- CHAT HISTORY ----------------
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+        # 🔥 FIX: Use hash instead of raw bytes
+        file_hash = hashlib.md5(file_bytes).hexdigest()
 
-# ---------------- USER INPUT ----------------
-user_input = st.chat_input("💬 Ask something about your document...")
+        if st.session_state.file_hash != file_hash:
+            st.session_state.file_hash = file_hash
 
-if user_input:
+            with st.spinner("📄 Processing document..."):
+                try:
+                    st.session_state.vector_db = process_pdf(file_bytes)
+                    st.success("📄 PDF loaded successfully")
+                except Exception as e:
+                    st.session_state.vector_db = None  # 🔥 safety reset
+                    st.error(f"❌ Error processing file: {str(e)}")
 
-    st.session_state.messages.append({"role": "user", "content": user_input})
+    # 🔷 Status
+    if st.session_state.vector_db:
+        st.success("✅ You can start asking questions.")
+
+    st.warning("⚠️ Free-tier limit is low (~20 requests/day). Use carefully.")
+    st.markdown("---")
+    st.caption("⚡ Built with Gemini + RAG + FAISS | ChatPDF AI")
+
+
+# 🔷 API key check
+api_key = os.getenv("GOOGLE_API_KEY")
+if not api_key:
+    st.error("🚨 API key not found. Please check your .env file.")
+    st.stop()
+
+
+# 🔷 Empty state (FIXED)
+if not st.session_state.chat_history and st.session_state.vector_db is None:
+    st.info("👋 Upload a PDF and start asking questions!")
+
+
+# 🔷 Display chat
+for role, message in st.session_state.chat_history:
+    with st.chat_message(role):
+        st.write(message)
+
+
+# 🔷 Cached response (reduce API calls)
+@st.cache_data(show_spinner=False)
+def cached_answer(context, query):
+    return generate_answer(context, query)
+
+
+# 🔷 Chat input
+query = st.chat_input("Ask anything about your PDF...")
+
+if query and query.strip():
+    st.session_state.chat_history.append(("user", query))
 
     with st.chat_message("user"):
-        st.markdown(user_input)
+        st.write(query)
 
-    if "qa" not in st.session_state:
-        response = "⚠️ Please upload a PDF first"
-
+    # 🔷 Generate response
+    if st.session_state.vector_db is None:
+        response = "⚠️ Please upload a document first."
     else:
-        with st.spinner("🤔 Thinking..."):
-            try:
-                # 🧠 Chat history context
-                history = "\n".join(
-                    [f"{m['role']}: {m['content']}" for m in st.session_state.messages]
-                )
+        try:
+            with st.spinner("🤔 Thinking..."):
 
-                query = f"""
-                Chat History:
-                {history}
+                retriever = st.session_state.vector_db.as_retriever(search_kwargs={"k": 3})
+                docs = retriever.invoke(query)
 
-                Question:
-                {user_input}
-                """
-
-                result = st.session_state.qa.invoke({"query": query})
-
-                response = result["result"]
-
-                # 📄 Source display
-                sources = result.get("source_documents", [])
-                if sources:
-                    response += "\n\n📄 **Sources:**\n"
-                    for doc in sources:
-                        page = doc.metadata.get("page", "N/A")
-                        response += f"- Page {page + 1}\n"
-
-            except Exception as e:
-                if "quota" in str(e).lower() or "429" in str(e):
-                    response = "⚠️ API quota exceeded. Try later."
+                if not docs:
+                    response = "⚠️ I couldn't find relevant information in the document for your question."
                 else:
-                    response = "⚠️ Something went wrong."
+                    context = "\n".join([doc.page_content for doc in docs])
+                    context = context[:4000]
 
-    st.session_state.messages.append({"role": "assistant", "content": response})
+                    # 🔥 Use cached answer
+                    response = cached_answer(context, query)
 
-    # ---------------- STREAMING EFFECT ----------------
+        except Exception as e:
+            error_msg = str(e)
+
+            # 🔷 Quota (daily limit)
+            if "429" in error_msg or "quota" in error_msg.lower():
+                response = "⚠️ Daily limit reached. Please try again after some time."
+
+            # 🔷 Network issues
+            elif "timeout" in error_msg.lower() or "connection" in error_msg.lower():
+                response = "🌐 Network issue. Please check your internet connection."
+
+            # 🔷 Fallback
+            else:
+                response = "❌ Something went wrong. Please try again."
+
     with st.chat_message("assistant"):
-        placeholder = st.empty()
-        full_response = ""
+        st.write(response)
 
-        for word in response.split():
-            full_response += word + " "
-            placeholder.markdown(full_response + "▌")
-
-        placeholder.markdown(full_response)
+    st.session_state.chat_history.append(("assistant", response))

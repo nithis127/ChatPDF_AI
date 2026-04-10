@@ -1,29 +1,25 @@
-# Virtual Environment
-.venv/
-
-# Python cache
+# Python
 __pycache__/
 *.pyc
 
-# Environment variables
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables (CRITICAL)
 .env
-
-# Temp files
-temp.pdf
-*.log
-*.tmp
-
-# Vector DB
-faiss_index/
-vector_store/
 
 # Streamlit
 .streamlit/
 
-# VS Code / Devcontainer
-.devcontainer/
-.vscode/
-
 # OS files
 .DS_Store
 Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
